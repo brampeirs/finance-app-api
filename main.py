@@ -2,10 +2,20 @@ from typing import Union, Annotated
 
 from fastapi import FastAPI, Depends, Query
 
+from fastapi.middleware.cors import CORSMiddleware
+
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from sqlalchemy import asc  
 
 app = FastAPI()
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # tijdelijk: alles toestaan
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 
 class Balance(SQLModel, table=True):
