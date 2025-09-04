@@ -1,6 +1,7 @@
-from typing import Union, Annotated
+from typing import Annotated
+import re
 
-from fastapi import FastAPI, Depends, Query
+from fastapi import FastAPI, Depends, Query, HTTPException, status
 
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -24,6 +25,20 @@ class Balance(SQLModel, table=True):
     balance: float
     
 
+# I/O models
+class BalanceBase(SQLModel):
+    date: str
+    balance: float
+
+
+class BalanceCreate(BalanceBase):
+    pass
+
+
+class BalanceRead(BalanceBase):
+    id: int
+
+
 sqlite_file_name = "database.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"
 
@@ -46,16 +61,30 @@ def on_startup():
 
 
 # Balance
-@app.get("/balance/")
-async def read_balance(session: SessionDep, offset: int = 0, limit: Annotated[int, Query(le=100)] = 100) -> list[Balance]:
+@app.get("/balance/", response_model=list[BalanceRead])
+async def read_balance(
+    session: SessionDep,
+    offset: Annotated[int, Query(ge=0)] = 0,
+    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+) -> list[Balance]:
     statement = select(Balance).order_by(asc(Balance.date)).offset(offset).limit(limit)
     return session.exec(statement).all()
     
 
+@app.post("/balance/", response_model=BalanceRead, status_code=status.HTTP_201_CREATED)
+async def create_balance(balance: BalanceCreate, session: SessionDep):
+    # Enforce unique date per balance entry
+    # Validate YYYY-MM format
+    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", balance.date):
+        raise HTTPException(status_code=422, detail="date must be in 'YYYY-MM' format")
 
-@app.post("/balance/")
-async def create_balance(balance: Balance, session: SessionDep):
-    session.add(balance)
+    date_str = balance.date
+    existing = session.exec(select(Balance).where(Balance.date == date_str)).first()
+    if existing:
+        raise HTTPException(status_code=409, detail="Balance for this date already exists")
+
+    db_balance = Balance(date=date_str, balance=balance.balance)
+    session.add(db_balance)
     session.commit()
-    session.refresh(balance)
-    return balance
+    session.refresh(db_balance)
+    return db_balance
