@@ -88,3 +88,12 @@ async def create_balance(balance: BalanceCreate, session: SessionDep):
     session.commit()
     session.refresh(db_balance)
     return db_balance
+
+@app.delete("/balance/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
+async def delete_balance(item_id: int, session: SessionDep):
+    balance = session.get(Balance, item_id)
+    if not balance:
+        raise HTTPException(status_code=404, detail="Balance not found")
+    session.delete(balance)
+    session.commit()
+
