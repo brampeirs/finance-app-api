@@ -1,12 +1,13 @@
+import re, logging 
 from typing import Annotated
-import re
-
 from fastapi import FastAPI, Depends, Query, HTTPException, status
-
 from fastapi.middleware.cors import CORSMiddleware
-
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from sqlalchemy import asc  
+
+# Configure logging
+logger = logging.getLogger('app')
+logger.setLevel(logging.INFO)
 
 app = FastAPI()
 
@@ -14,9 +15,10 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://finance-app-three-rosy.vercel.app"],  
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET","POST","DELETE","OPTIONS"],
     allow_headers=["*"],
 )
+
 
 
 class Balance(SQLModel, table=True):
@@ -76,24 +78,30 @@ async def create_balance(balance: BalanceCreate, session: SessionDep):
     # Enforce unique date per balance entry
     # Validate YYYY-MM format
     if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", balance.date):
+        logger.warning(f"Attempted to create balance with invalid date={balance.date}")
         raise HTTPException(status_code=422, detail="date must be in 'YYYY-MM' format")
 
     date_str = balance.date
     existing = session.exec(select(Balance).where(Balance.date == date_str)).first()
     if existing:
+        logger.warning(f"Attempted to create balance for existing date={date_str}")
         raise HTTPException(status_code=409, detail="Balance for this date already exists")
 
     db_balance = Balance(date=date_str, balance=balance.balance)
     session.add(db_balance)
     session.commit()
     session.refresh(db_balance)
+    logger.info(f"Created balance month={date_str} balance={balance.balance} id={db_balance.id}")
     return db_balance
 
 @app.delete("/balance/{item_id}", status_code=status.HTTP_204_NO_CONTENT)
 async def delete_balance(item_id: int, session: SessionDep):
     balance = session.get(Balance, item_id)
     if not balance:
+        logger.warning(f"Attempted to delete non-existing balance id={item_id}")
         raise HTTPException(status_code=404, detail="Balance not found")
+    logger.info(f"Deleted balance id={item_id}")
     session.delete(balance)
     session.commit()
+
 
