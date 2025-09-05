@@ -45,7 +45,7 @@ app.add_middleware(
     CORSMiddleware,
     allow_origins=["https://finance-app-three-rosy.vercel.app"],
     allow_credentials=True,
-    allow_methods=["GET","POST","DELETE","OPTIONS"],
+    allow_methods=["*"],
     allow_headers=["*"],
 )
 
