@@ -7,8 +7,14 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 from sqlalchemy import asc
 
 # Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler()  # This ensures logs are printed to console
+    ]
+)
 logger = logging.getLogger('app')
-logger.setLevel(logging.INFO)
 
 app = FastAPI()
 
