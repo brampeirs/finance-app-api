@@ -1,9 +1,10 @@
-import re, logging 
+import re, logging, traceback
 from typing import Annotated
-from fastapi import FastAPI, Depends, Query, HTTPException, status
+from fastapi import FastAPI, Depends, Query, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from sqlmodel import Field, Session, SQLModel, create_engine, select
-from sqlalchemy import asc  
+from sqlalchemy import asc
 
 # Configure logging
 logger = logging.getLogger('app')
@@ -11,9 +12,32 @@ logger.setLevel(logging.INFO)
 
 app = FastAPI()
 
+# Global exception handler for 500 errors
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    """
+    Global exception handler that catches all unhandled exceptions,
+    logs them with stack trace, and returns a 500 error response.
+    """
+    # Log the exception with full stack trace
+    logger.error(
+        f"Unhandled exception occurred: {type(exc).__name__}: {str(exc)}\n"
+        f"Request: {request.method} {request.url}\n"
+        f"Stack trace:\n{traceback.format_exc()}"
+    )
+
+    # Return a generic 500 error response
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": "Internal server error",
+            "error_type": type(exc).__name__
+        }
+    )
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["https://finance-app-three-rosy.vercel.app"],  
+    allow_origins=["https://finance-app-three-rosy.vercel.app"],
     allow_credentials=True,
     allow_methods=["GET","POST","DELETE","OPTIONS"],
     allow_headers=["*"],
