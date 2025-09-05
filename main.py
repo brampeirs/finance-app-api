@@ -135,3 +135,6 @@ async def delete_balance(item_id: int, session: SessionDep):
     session.commit()
 
 
+@app.get("/__test_500")
+def force_500():
+    raise RuntimeError("Boom! This is a test error")
