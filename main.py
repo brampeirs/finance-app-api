@@ -4,7 +4,7 @@ from fastapi import FastAPI, Depends, Query, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlmodel import Field, Session, SQLModel, create_engine, select
-from sqlalchemy import asc
+from sqlalchemy import asc, desc
 from datetime import datetime
 from utils import validate_date_format, validate_date_range, calculate_months_between
 
@@ -279,6 +279,38 @@ async def read_summary(
         "last_month_delta": last_month_delta,
         "positive_months": positive_months,
         "negative_months": negative_months
+    }
+
+# /metrics/current-month
+# Response
+# {
+#   "month": "2025-09",
+#   "balance": 1400.0,
+#   "delta_vs_prev": 50.0   // null if no previous month
+# }
+@app.get("/metrics/current-month/")
+async def read_current_month(session: SessionDep):
+    # Get last balance from database
+    statement = select(Balance).order_by(desc(Balance.date)).limit(1)
+    last_balance = session.exec(statement).first()
+
+    if not last_balance:
+        return {
+            "month": None,
+            "balance": None,
+            "delta_vs_prev": None
+        }
+
+    # Get previous balance from database
+    prev_statement = select(Balance).where(Balance.date < last_balance.date).order_by(desc(Balance.date)).limit(1)
+    prev_balance = session.exec(prev_statement).first()
+
+    delta_vs_prev = last_balance.balance - prev_balance.balance if prev_balance else None
+
+    return {
+        "month": last_balance.date,
+        "balance": last_balance.balance,
+        "delta_vs_prev": delta_vs_prev
     }
 
 
