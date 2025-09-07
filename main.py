@@ -1,10 +1,12 @@
-import re, logging, traceback
+import logging, traceback
 from typing import Annotated
 from fastapi import FastAPI, Depends, Query, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from sqlmodel import Field, Session, SQLModel, create_engine, select
 from sqlalchemy import asc
+from datetime import datetime
+from utils import validate_date_format, validate_date_range, calculate_months_between
 
 # Configure logging
 logging.basicConfig(
@@ -70,6 +72,9 @@ class BalanceCreate(BalanceBase):
 class BalanceRead(BalanceBase):
     id: int
 
+class BalanceWithDelta(BalanceRead):
+    delta: float | None = None
+
 
 sqlite_file_name = "database.db"
 sqlite_url = f"sqlite:///{sqlite_file_name}"
@@ -87,6 +92,11 @@ def get_session():
 
 SessionDep = Annotated[Session, Depends(get_session)]
 
+def get_balances_ordered(session: Session, offset: int = 0, limit: int = 100) -> list[Balance]:
+    """Helper function to get balances ordered by date. Shared logic for consistency."""
+    statement = select(Balance).order_by(asc(Balance.date)).offset(offset).limit(limit)
+    return session.exec(statement).all()
+
 @app.on_event("startup")
 def on_startup():
     create_db_and_tables()
@@ -99,17 +109,18 @@ async def read_balance(
     offset: Annotated[int, Query(ge=0)] = 0,
     limit: Annotated[int, Query(ge=1, le=100)] = 100,
 ) -> list[Balance]:
-    statement = select(Balance).order_by(asc(Balance.date)).offset(offset).limit(limit)
-    return session.exec(statement).all()
+    return get_balances_ordered(session, offset, limit)
     
 
 @app.post("/balance/", response_model=BalanceRead, status_code=status.HTTP_201_CREATED)
 async def create_balance(balance: BalanceCreate, session: SessionDep):
     # Enforce unique date per balance entry
     # Validate YYYY-MM format
-    if not re.fullmatch(r"\d{4}-(0[1-9]|1[0-2])", balance.date):
+    try:
+        validate_date_format(balance.date)
+    except HTTPException:
         logger.warning(f"Attempted to create balance with invalid date={balance.date}")
-        raise HTTPException(status_code=422, detail="date must be in 'YYYY-MM' format")
+        raise
 
     date_str = balance.date
     existing = session.exec(select(Balance).where(Balance.date == date_str)).first()
@@ -133,6 +144,142 @@ async def delete_balance(item_id: int, session: SessionDep):
     logger.info(f"Deleted balance id={item_id}")
     session.delete(balance)
     session.commit()
+
+
+# Example response
+# {
+#   "range": { "from": "2025-01", "to": "2025-06" },
+#   "items": [
+#     { "month": "2025-01", "balance": 1000.0, "delta": null },
+#     { "month": "2025-03", "balance": 1300.0, "delta": 300.0 },
+#     { "month": "2025-06", "balance": 1250.0, "delta": -50.0 }
+#   ],
+#   "missing_months": ["2025-02", "2025-04", "2025-05"]
+# }
+@app.get("/metrics/delta/")
+async def read_delta(
+    session: SessionDep,
+    start: str,
+    end: str,
+):
+    # Validate date range
+    validate_date_range(start, end)
+    
+    # Generate all months in range
+    start_date = datetime.strptime(start, "%Y-%m")
+    end_date = datetime.strptime(end, "%Y-%m")
+    
+    all_months = []
+    current = start_date
+    while current <= end_date:
+        all_months.append(current.strftime("%Y-%m"))
+        # Move to next month
+        if current.month == 12:
+            current = current.replace(year=current.year + 1, month=1)
+        else:
+            current = current.replace(month=current.month + 1)
+    
+    # Get balances in range
+    statement = select(Balance).where(Balance.date >= start, Balance.date <= end).order_by(asc(Balance.date))
+    balances = session.exec(statement).all()
+    
+    # Create lookup for existing balances
+    balance_dict = {b.date: b for b in balances}
+    
+    # Find missing months
+    missing_months = [month for month in all_months if month not in balance_dict]
+    
+    # Build items with deltas
+    items = []
+    prev_balance = None
+    
+    for balance in balances:
+        delta = None
+        if prev_balance:
+            delta = balance.balance - prev_balance.balance
+        
+        items.append({
+            "month": balance.date,
+            "balance": balance.balance,
+            "delta": delta
+        })
+        prev_balance = balance
+    
+    return {
+        "range": {"from": start, "to": end},
+        "items": items,
+        "missing_months": missing_months
+    }
+
+# GET /metrics/summary?from=YYYY-MM&to=YYYY-MM
+# Response
+# {
+#   "range": { "from": "2025-01", "to": "2025-06" },
+#   "start_balance": 1000.0,            // first available month in rage, or null
+#   "end_balance": 1250.0,              // last available month in range, or null
+#   "total_change": 250.0,              // end - start; null iff <2 data points
+#   "avg_monthly_change": 125.0,        // average of all calculated deltas; null iff <2 data points
+#   "last_month_delta": -50.0,          // last delta in the series; null iff <2 data points
+#   "positive_months": 1,               // amount of deltas > 0
+#   "negative_months": 1                // amount of deltas < 0
+# }
+@app.get("/metrics/summary/")
+async def read_summary(
+    session: SessionDep,
+    start: str,
+    end: str,
+):
+    # Validate date range
+    validate_date_range(start, end)
+
+    # Get balances in range directly from database
+    statement = select(Balance).where(Balance.date >= start, Balance.date <= end).order_by(asc(Balance.date))
+    balances = session.exec(statement).all()
+
+    if not balances:
+        return {
+            "range": {"from": start, "to": end},
+            "start_balance": None,
+            "end_balance": None,
+            "total_change": None,
+            "avg_monthly_change": None,
+            "last_month_delta": None,
+            "positive_months": 0,
+            "negative_months": 0
+        }
+
+    # Calculate basic metrics
+    start_balance = balances[0].balance
+    end_balance = balances[-1].balance
+    total_change = end_balance - start_balance if len(balances) > 1 else None
+
+    # Calculate true average monthly change based on time elapsed
+    months_elapsed = calculate_months_between(start, end)
+    avg_monthly_change = total_change / months_elapsed if months_elapsed > 0 and total_change is not None else None
+
+    # Calculate consecutive month deltas for positive/negative counting
+    consecutive_deltas = []
+    last_month_delta = None
+
+    for i in range(1, len(balances)):
+        delta = balances[i].balance - balances[i-1].balance
+        consecutive_deltas.append(delta)
+        last_month_delta = delta  # This will be the last one
+
+    # Count positive and negative consecutive changes
+    positive_months = sum(1 for delta in consecutive_deltas if delta > 0)
+    negative_months = sum(1 for delta in consecutive_deltas if delta < 0)
+
+    return {
+        "range": {"from": start, "to": end},
+        "start_balance": start_balance,
+        "end_balance": end_balance,
+        "total_change": total_change,
+        "avg_monthly_change": avg_monthly_change,
+        "last_month_delta": last_month_delta,
+        "positive_months": positive_months,
+        "negative_months": negative_months
+    }
 
 
 @app.get("/__test_500")
