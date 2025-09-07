@@ -94,7 +94,7 @@ SessionDep = Annotated[Session, Depends(get_session)]
 
 def get_balances_ordered(session: Session, offset: int = 0, limit: int = 100) -> list[Balance]:
     """Helper function to get balances ordered by date. Shared logic for consistency."""
-    statement = select(Balance).order_by(asc(Balance.date)).offset(offset).limit(limit)
+    statement = select(Balance).order_by(desc(Balance.date)).offset(offset).limit(limit)
     return session.exec(statement).all()
 
 @app.on_event("startup")
@@ -145,7 +145,7 @@ async def delete_balance(item_id: int, session: SessionDep):
     session.delete(balance)
     session.commit()
 
-
+# GET /metrics/delta?start=YYYY-MM&end=YYYY-MM (start and end required)
 # Example response
 # {
 #   "range": { "from": "2025-01", "to": "2025-06" },
@@ -211,7 +211,7 @@ async def read_delta(
         "missing_months": missing_months
     }
 
-# GET /metrics/summary?from=YYYY-MM&to=YYYY-MM
+# GET /metrics/summary?start=YYYY-MM&end=YYYY-MM (start and end required)
 # Response
 # {
 #   "range": { "from": "2025-01", "to": "2025-06" },
