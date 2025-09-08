@@ -394,8 +394,8 @@ async def post_assistant(request: ChatRequest):
     response = client.responses.create(
         model="gpt-5-nano",
         input=input_messages,
-        tools=tools,        
-        tool_choice="required"
+        tools=tools,    
+        temperature=0.2            
     )
 
     # Save function call outputs for subsequent requests
