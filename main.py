@@ -385,11 +385,11 @@ class ChatResponse(SQLModel):
 @app.post("/ai/chat/", response_model=ChatResponse)
 async def post_assistant(request: ChatRequest):
 
-    INSTRUCTIONS = (
-        "Respond in Dutch with a single concise sentence, strictly based on tool data. "
+    INSTRUCTIONS = """
+        "Respond in users language with a single concise sentence, strictly based on tool data. "
         "If required tool arguments are missing, ask the user for them in a short clarifying question. "
         "Do not invent arguments and do not make a tool call until all required arguments are provided."
-    )
+    """
 
     logger.info(f"Received chat request: {request}")
 
@@ -417,7 +417,7 @@ async def post_assistant(request: ChatRequest):
         args = json.loads(tool_call.arguments)
    
 
-        result = call_function(name, args)
+        result = await call_function(name, args)
         input_messages.append({
             "type": "function_call_output",
             "call_id": tool_call.call_id,
@@ -437,7 +437,7 @@ async def post_assistant(request: ChatRequest):
 
     # 5. The model should be able to give a response!
     print("Final output:")
-    print(response.model_dump_json(indent=2))
+    # print(response.model_dump_json(indent=2))
     print("\n" + response.output_text)
 
     return ChatResponse(
@@ -451,45 +451,28 @@ def force_500():
     raise RuntimeError("Boom! This is a test error")
 
 def get_current_month_balance():
-    return {
-        "month": "2025-09",
-        "balance": 1400.0,
-        "delta_vs_prev": 50.0
-    }
+    logger.info(f"get_current_month_balance()")
+    with Session(engine) as session:
+        return  read_current_month(session)
 
 def get_monthly_balance_deltas(start: str, end: str):
     logger.info(f"get_monthly_balance_deltas({start}, {end})")
-    return {
-        "range": {"from": start, "to": end},
-        "items": [
-            {"month": "2025-01", "balance": 1000.0, "delta": 50.0},
-            {"month": "2025-02", "balance": 1050.0, "delta": 50.0},
-            {"month": "2025-03", "balance": 1100.0, "delta": 50.0}
-        ],
-        "missing_months": []
-    }
+    with Session(engine) as session:
+        return read_delta(session, start, end)
 
 def get_monthly_balance_summary(start: str, end: str):
     logger.info(f"get_monthly_balance_summary({start}, {end})")
-    return {
-        "range": {"from": start, "to": end},
-        "start_balance": 1000.0,
-        "end_balance": 1250.0,
-        "total_change": 250.0,
-        "avg_monthly_change": 125.0,
-        "last_month_delta": 50.0,
-        "positive_months": 1,
-        "negative_months": 1
-    }
+    with Session(engine) as session:
+        return read_summary(session, start, end)
 
-def call_function(name, args):
+async def call_function(name, args):
     logger.info(f"Calling function {name} with args {args}")
 
     if name == "get_current_month_balance":
-       return get_current_month_balance()
+       return await get_current_month_balance()
     if name == "get_monthly_balance_deltas":
-       return get_monthly_balance_deltas(args.get("start"), args.get("end"))
+       return await get_monthly_balance_deltas(args.get("start"), args.get("end"))
     if name == "get_monthly_balance_summary":
-        return get_monthly_balance_summary(args.get("start"), args.get("end"))
+        return await get_monthly_balance_summary(args.get("start"), args.get("end"))
         
      
