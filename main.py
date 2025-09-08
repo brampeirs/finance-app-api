@@ -1,5 +1,5 @@
 import logging, traceback
-from typing import Annotated
+from typing import Annotated, Literal
 from fastapi import FastAPI, Depends, Query, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
@@ -312,6 +312,28 @@ async def read_current_month(session: SessionDep):
         "balance": last_balance.balance,
         "delta_vs_prev": delta_vs_prev
     }
+
+class Message(SQLModel):
+    role: Literal["system", "user", "assistant"]
+    content: str
+
+class ChatRequest(SQLModel):
+    messages: list[Message]
+    stream: bool = False
+
+class ChatResponse(SQLModel):
+    role: Literal["assistant"]
+    content: str
+
+# request body { messages: Array<{role: "system"|"user"|"assistant", content: string}>, stream?: boolean }
+@app.post("/ai/chat/", response_model=ChatResponse)
+async def post_assistant(request: ChatRequest):
+    # TODO: Implement actual chat logic using request.messages and request.stream
+    logger.info(f"Received chat request: {request}")
+    return ChatResponse(
+        role="assistant",
+        content=f"Received {len(request.messages)} messages"
+    )
 
 
 @app.get("/__test_500")
