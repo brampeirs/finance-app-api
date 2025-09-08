@@ -1,3 +1,4 @@
+import json
 import logging, traceback
 from typing import Annotated, Literal
 from fastapi import FastAPI, Depends, Query, HTTPException, status, Request
@@ -7,6 +8,61 @@ from sqlmodel import Field, Session, SQLModel, create_engine, select
 from sqlalchemy import asc, desc
 from datetime import datetime
 from utils import validate_date_format, validate_date_range, calculate_months_between
+from openai import OpenAI
+client = OpenAI()
+
+# 1. Define a list of callable tools for the model
+tools = [
+    {
+        "type": "function",
+        "name": "get_current_month_balance",
+        "description": "Get details about last entered month's balance",
+    },
+    {
+        "type": "function",
+        "name": "get_monthly_balance_deltas",
+        "description": "Get balance deltas for a given date range",        
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "start": {
+                "type": "string",
+                "pattern": r"^\d{4}-(0[1-9]|1[0-2])$",
+                "description": "Start in YYYY-MM"
+                },
+                "end": {
+                "type": "string",
+                "pattern": r"^\d{4}-(0[1-9]|1[0-2])$",
+                "description": "End in YYYY-MM"
+                }
+            },
+            "required": ["start", "end"]
+        },
+    },
+    {
+        "type": "function",
+        "name": "get_monthly_balance_summary",
+        "description": "Get a summary of balance changes for a given date range",
+        "parameters": {
+            "type": "object",
+            "additionalProperties": False,
+            "properties": {
+                "start": {
+                "type": "string",
+                "pattern": r"^\d{4}-(0[1-9]|1[0-2])$",
+                "description": "Start in YYYY-MM"
+                },
+                "end": {
+                "type": "string",
+                "pattern": r"^\d{4}-(0[1-9]|1[0-2])$",
+                "description": "End in YYYY-MM"
+                }
+            },
+            "required": ["start", "end"]
+        },
+    }
+]
 
 # Configure logging
 logging.basicConfig(
@@ -330,12 +386,101 @@ class ChatResponse(SQLModel):
 async def post_assistant(request: ChatRequest):
     # TODO: Implement actual chat logic using request.messages and request.stream
     logger.info(f"Received chat request: {request}")
+
+    #Create a running input list we will add to over time
+    input_messages = request.messages
+
+    # Prompt the model with tools defined
+    response = client.responses.create(
+        model="gpt-5-nano",
+        input=input_messages,
+        tools=tools,        
+        tool_choice="required"
+    )
+
+    # Save function call outputs for subsequent requests
+    input_messages += response.output
+
+
+    for tool_call in response.output:
+        if tool_call.type != "function_call":
+            continue
+
+        name = tool_call.name
+        args = json.loads(tool_call.arguments)
+   
+
+        result = call_function(name, args)
+        input_messages.append({
+            "type": "function_call_output",
+            "call_id": tool_call.call_id,
+            "output": str(result)
+        })
+
+    print("Final input:")
+    print(input_messages)
+
+    response = client.responses.create(
+        model="gpt-5-nano",
+        instructions="Respond in 1 sentence, based on tooldata, no additional information.",
+        tools=tools,
+        input=input_messages    )
+
+    # 5. The model should be able to give a response!
+    print("Final output:")
+    print(response.model_dump_json(indent=2))
+    print("\n" + response.output_text)
+
     return ChatResponse(
         role="assistant",
-        content=f"Received {len(request.messages)} messages"
+        content=response.output_text
     )
 
 
 @app.get("/__test_500")
 def force_500():
     raise RuntimeError("Boom! This is a test error")
+
+def get_current_month_balance():
+    return {
+        "month": "2025-09",
+        "balance": 1400.0,
+        "delta_vs_prev": 50.0
+    }
+
+def get_monthly_balance_deltas(start: str, end: str):
+    logger.info(f"get_monthly_balance_deltas({start}, {end})")
+    return {
+        "range": {"from": start, "to": end},
+        "items": [
+            {"month": "2025-01", "balance": 1000.0, "delta": 50.0},
+            {"month": "2025-02", "balance": 1050.0, "delta": 50.0},
+            {"month": "2025-03", "balance": 1100.0, "delta": 50.0}
+        ],
+        "missing_months": []
+    }
+
+def get_monthly_balance_summary(start: str, end: str):
+    logger.info(f"get_monthly_balance_summary({start}, {end})")
+    return {
+        "range": {"from": start, "to": end},
+        "start_balance": 1000.0,
+        "end_balance": 1250.0,
+        "total_change": 250.0,
+        "avg_monthly_change": 125.0,
+        "last_month_delta": 50.0,
+        "positive_months": 1,
+        "negative_months": 1
+    }
+
+def call_function(name, args):
+    logger.info(f"Calling function {name} with args {args}")
+
+    if name == "get_current_month_balance":
+       return get_current_month_balance()
+    if name == "get_monthly_balance_deltas":
+       return get_monthly_balance_deltas(args.get("start"), args.get("end"))
+    if name == "get_monthly_balance_summary":
+        return get_monthly_balance_summary(args.get("start"), args.get("end"))
+        
+     
