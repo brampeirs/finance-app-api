@@ -384,7 +384,13 @@ class ChatResponse(SQLModel):
 # request body { messages: Array<{role: "system"|"user"|"assistant", content: string}>, stream?: boolean }
 @app.post("/ai/chat/", response_model=ChatResponse)
 async def post_assistant(request: ChatRequest):
-    # TODO: Implement actual chat logic using request.messages and request.stream
+
+    INSTRUCTIONS = (
+        "Respond in Dutch with a single concise sentence, strictly based on tool data. "
+        "If required tool arguments are missing, ask the user for them in a short clarifying question. "
+        "Do not invent arguments and do not make a tool call until all required arguments are provided."
+    )
+
     logger.info(f"Received chat request: {request}")
 
     #Create a running input list we will add to over time
@@ -392,10 +398,11 @@ async def post_assistant(request: ChatRequest):
 
     # Prompt the model with tools defined
     response = client.responses.create(
-        model="gpt-5-nano",
+        model="gpt-4.1-mini",
         input=input_messages,
-        tools=tools,    
-                 
+        tools=tools,
+        instructions=INSTRUCTIONS,
+        temperature=0.2,
     )
 
     # Save function call outputs for subsequent requests
@@ -421,10 +428,12 @@ async def post_assistant(request: ChatRequest):
     print(input_messages)
 
     response = client.responses.create(
-        model="gpt-5-nano",
-        instructions="Respond in 1 sentence, based on tooldata, no additional information.",
+        model="gpt-4.1-mini",
+        input=input_messages,
         tools=tools,
-        input=input_messages    )
+        instructions=INSTRUCTIONS,
+        temperature=0.2,
+    )
 
     # 5. The model should be able to give a response!
     print("Final output:")
