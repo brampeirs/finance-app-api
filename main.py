@@ -15,52 +15,17 @@ client = OpenAI()
 tools = [
     {
         "type": "function",
-        "name": "get_current_month_balance",
-        "description": "Get details about last entered month's balance",
-    },
-    {
-        "type": "function",
-        "name": "get_monthly_balance_deltas",
-        "description": "Get balance deltas for a given date range",        
+        "name": "get_balance",
+        "description": "Fetch balance for a specific month. If the user asked a relative period (e.g., 'two months ago', 'last month'), convert that to a concrete YYYY-MM first and pass it here.",
         "parameters": {
             "type": "object",
-            "additionalProperties": False,
             "properties": {
-                "start": {
-                "type": "string",
-                "pattern": r"^\d{4}-(0[1-9]|1[0-2])$",
-                "description": "Start in YYYY-MM"
-                },
-                "end": {
-                "type": "string",
-                "pattern": r"^\d{4}-(0[1-9]|1[0-2])$",
-                "description": "End in YYYY-MM"
+                "month": {
+                    "type": "string",
+                    "description": "Target month in YYYY-MM (e.g., '2025-07'). If omitted, backend uses current month."
                 }
-            },
-            "required": ["start", "end"]
-        },
-    },
-    {
-        "type": "function",
-        "name": "get_monthly_balance_summary",
-        "description": "Get a summary of balance changes for a given date range",
-        "parameters": {
-            "type": "object",
-            "additionalProperties": False,
-            "properties": {
-                "start": {
-                "type": "string",
-                "pattern": r"^\d{4}-(0[1-9]|1[0-2])$",
-                "description": "Start in YYYY-MM"
-                },
-                "end": {
-                "type": "string",
-                "pattern": r"^\d{4}-(0[1-9]|1[0-2])$",
-                "description": "End in YYYY-MM"
-                }
-            },
-            "required": ["start", "end"]
-        },
+            }
+        }
     }
 ]
 
@@ -385,10 +350,11 @@ class ChatResponse(SQLModel):
 @app.post("/ai/chat/", response_model=ChatResponse)
 async def post_assistant(request: ChatRequest):
 
-    INSTRUCTIONS = """
+    INSTRUCTIONS = f"""
         "Respond in users language with a single concise sentence, strictly based on tool data. "
         "If required tool arguments are missing, ask the user for them in a short clarifying question. "
         "Do not invent arguments and do not make a tool call until all required arguments are provided."
+        "The current date is {datetime.now().strftime('%Y-%m-%d')}.
     """
 
     logger.info(f"Received chat request: {request}")
@@ -404,30 +370,29 @@ async def post_assistant(request: ChatRequest):
         instructions=INSTRUCTIONS,
         temperature=0.2,
     )
-
-    # Save function call outputs for subsequent requests
+    
+    # Voeg modeloutput toe aan transcript
     input_messages += response.output
 
+    # Verzamel tool-calls
+    tool_calls = [o for o in response.output if o.type == "function_call"]
 
-    for tool_call in response.output:
-        if tool_call.type != "function_call":
-            continue
+    if not tool_calls:
+        # GEEN tool-calls -> het was een (clarifying) assistant-bericht.
+        # -> Stuur dit meteen terug naar de frontend en STOP.
+        return ChatResponse(content=response.output_text, role="assistant")
 
-        name = tool_call.name
-        args = json.loads(tool_call.arguments)
-   
-
-        result = await call_function(name, args)
+    # Er ZIJN tool-calls -> voer ze uit
+    for tool_call in tool_calls:
+        result = await call_function(tool_call.name, json.loads(tool_call.arguments))
         input_messages.append({
             "type": "function_call_output",
             "call_id": tool_call.call_id,
-            "output": str(result)
+            "output": json.dumps(result)
         })
 
-    print("Final input:")
-    print(input_messages)
-
-    response = client.responses.create(
+    # Nu pas de tweede model-call, omdat er nieuwe tool-data is
+    response2 = client.responses.create(
         model="gpt-4.1-mini",
         input=input_messages,
         tools=tools,
@@ -435,15 +400,8 @@ async def post_assistant(request: ChatRequest):
         temperature=0.2,
     )
 
-    # 5. The model should be able to give a response!
-    print("Final output:")
-    # print(response.model_dump_json(indent=2))
-    print("\n" + response.output_text)
-
-    return ChatResponse(
-        role="assistant",
-        content=response.output_text
-    )
+    return ChatResponse(content=response2.output_text, role="assistant")
+    
 
 
 @app.get("/__test_500")
@@ -464,10 +422,17 @@ def get_monthly_balance_summary(start: str, end: str):
     logger.info(f"get_monthly_balance_summary({start}, {end})")
     with Session(engine) as session:
         return read_summary(session, start, end)
+    
+def get_balance(month: str | None = None):
+    logger.info(f"get_balance({month})")
+    with Session(engine) as session:
+        return read_summary(session, month, month)
 
 async def call_function(name, args):
     logger.info(f"Calling function {name} with args {args}")
-
+    
+    if name == "get_balance":
+        return await get_balance(args.get("month"))
     if name == "get_current_month_balance":
        return await get_current_month_balance()
     if name == "get_monthly_balance_deltas":
