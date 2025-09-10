@@ -17,6 +17,7 @@ tools = [
         "type": "function",
         "name": "get_balance",
         "description": "Fetch balance for a specific month. If the user asked a relative period (e.g., 'two months ago', 'last month'), convert that to a concrete YYYY-MM first and pass it here.",
+        "strict": "true",
         "parameters": {
             "type": "object",
             "properties": {
@@ -350,12 +351,7 @@ class ChatResponse(SQLModel):
 @app.post("/ai/chat/", response_model=ChatResponse)
 async def post_assistant(request: ChatRequest):
 
-    INSTRUCTIONS = f"""
-        "Respond in users language with a single concise sentence, strictly based on tool data. "
-        "If required tool arguments are missing, ask the user for them in a short clarifying question. "
-        "Do not invent arguments and do not make a tool call until all required arguments are provided."
-        "The current date is {datetime.now().strftime('%Y-%m-%d')}.
-    """
+
 
     logger.info(f"Received chat request: {request}")
 
@@ -364,12 +360,12 @@ async def post_assistant(request: ChatRequest):
 
     # Prompt the model with tools defined
     response = client.responses.create(
-        model="gpt-4.1-mini",
-        input=input_messages,
-        tools=tools,
-        instructions=INSTRUCTIONS,
-        temperature=0.2,
-    )
+        prompt= {
+            "id": "pmpt_68c1710ccc28819791f55143f28ac5ea0b21c468d0ed5fa7",
+            "variables": { "date": datetime.now().strftime("%Y-%m-%d") },            
+        },
+        input=input_messages
+    )   
     
     # Voeg modeloutput toe aan transcript
     input_messages += response.output
@@ -380,11 +376,16 @@ async def post_assistant(request: ChatRequest):
     if not tool_calls:
         # GEEN tool-calls -> het was een (clarifying) assistant-bericht.
         # -> Stuur dit meteen terug naar de frontend en STOP.
+        print("NO TOOL CALLS")
         return ChatResponse(content=response.output_text, role="assistant")
 
     # Er ZIJN tool-calls -> voer ze uit
+    print("TOOL CALLS")
+    print(tool_calls)
     for tool_call in tool_calls:
         result = await call_function(tool_call.name, json.loads(tool_call.arguments))
+        print("RESULT TOOL CALL")
+        print(result)
         input_messages.append({
             "type": "function_call_output",
             "call_id": tool_call.call_id,
@@ -393,12 +394,12 @@ async def post_assistant(request: ChatRequest):
 
     # Nu pas de tweede model-call, omdat er nieuwe tool-data is
     response2 = client.responses.create(
-        model="gpt-4.1-mini",
-        input=input_messages,
-        tools=tools,
-        instructions=INSTRUCTIONS,
-        temperature=0.2,
-    )
+        prompt={
+            "id": "pmpt_68c1710ccc28819791f55143f28ac5ea0b21c468d0ed5fa7",
+            "variables": { "date": datetime.now().strftime("%Y-%m-%d") },            
+        },
+        input=input_messages
+    )   
 
     return ChatResponse(content=response2.output_text, role="assistant")
     
