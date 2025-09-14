@@ -1,5 +1,6 @@
 import json
 import logging, traceback
+import asyncio
 from typing import Annotated, Literal
 from fastapi import FastAPI, Depends, Query, HTTPException, status, Request
 from fastapi.middleware.cors import CORSMiddleware
@@ -382,8 +383,12 @@ async def post_assistant(request: ChatRequest):
     # Er ZIJN tool-calls -> voer ze uit
     print("TOOL CALLS")
     print(tool_calls)
-    for tool_call in tool_calls:
-        result = await call_function(tool_call.name, json.loads(tool_call.arguments))
+    tasks = [
+        call_function(tool_call.name, json.loads(tool_call.arguments))
+        for tool_call in tool_calls
+    ]
+    results = await asyncio.gather(*tasks)
+    for tool_call, result in zip(tool_calls, results):
         print("RESULT TOOL CALL")
         print(result)
         input_messages.append({
@@ -431,14 +436,14 @@ def get_balance(month: str | None = None):
 
 async def call_function(name, args):
     logger.info(f"Calling function {name} with args {args}")
-    
+
     if name == "get_balance":
-        return await get_balance(args.get("month"))
+        return await asyncio.to_thread(get_balance, args.get("month"))
     if name == "get_current_month_balance":
-       return await get_current_month_balance()
+       return await asyncio.to_thread(get_current_month_balance)
     if name == "get_monthly_balance_deltas":
-       return await get_monthly_balance_deltas(args.get("start"), args.get("end"))
+       return await asyncio.to_thread(get_monthly_balance_deltas, args.get("start"), args.get("end"))
     if name == "get_monthly_balance_summary":
-        return await get_monthly_balance_summary(args.get("start"), args.get("end"))
+        return await asyncio.to_thread(get_monthly_balance_summary, args.get("start"), args.get("end"))
         
      
