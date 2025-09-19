@@ -1,3 +1,4 @@
+import asyncio
 import json
 import logging, traceback
 from typing import Annotated, Literal
@@ -382,8 +383,15 @@ async def post_assistant(request: ChatRequest):
     # Er ZIJN tool-calls -> voer ze uit
     print("TOOL CALLS")
     print(tool_calls)
-    for tool_call in tool_calls:
-        result = await call_function(tool_call.name, json.loads(tool_call.arguments))
+
+    tool_call_results = await asyncio.gather(
+        *[
+            call_function(tool_call.name, json.loads(tool_call.arguments))
+            for tool_call in tool_calls
+        ]
+    )
+
+    for tool_call, result in zip(tool_calls, tool_call_results):
         print("RESULT TOOL CALL")
         print(result)
         input_messages.append({
@@ -412,7 +420,7 @@ def force_500():
 def get_current_month_balance():
     logger.info(f"get_current_month_balance()")
     with Session(engine) as session:
-        return  read_current_month(session)
+        return read_current_month(session)
 
 def get_monthly_balance_deltas(start: str, end: str):
     logger.info(f"get_monthly_balance_deltas({start}, {end})")
@@ -435,10 +443,12 @@ async def call_function(name, args):
     if name == "get_balance":
         return await get_balance(args.get("month"))
     if name == "get_current_month_balance":
-       return await get_current_month_balance()
+        return await get_current_month_balance()
     if name == "get_monthly_balance_deltas":
-       return await get_monthly_balance_deltas(args.get("start"), args.get("end"))
+        return await get_monthly_balance_deltas(args.get("start"), args.get("end"))
     if name == "get_monthly_balance_summary":
         return await get_monthly_balance_summary(args.get("start"), args.get("end"))
+
+    raise ValueError(f"Unknown tool call: {name}")
         
      
