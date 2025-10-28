@@ -127,8 +127,8 @@ def on_startup():
 @app.get("/balance/", response_model=list[BalanceRead])
 async def read_balance(
     session: SessionDep,
-    offset: Annotated[int, Query(ge=0)] = 0,
-    limit: Annotated[int, Query(ge=1, le=100)] = 100,
+    offset: Annotated[int, Query(default=0, ge=0)],
+    limit: Annotated[int, Query(default=100, ge=1, le=100)],
 ) -> list[Balance]:
     return get_balances_ordered(session, offset, limit)
     
